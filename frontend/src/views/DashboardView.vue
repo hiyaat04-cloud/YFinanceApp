@@ -224,96 +224,265 @@ function formatVolume(vol) {
 </script>
 
 <template>
-<div class="dashboard-container">
-  <h2 class="text-center mb-4">Your Dashboard</h2>
-  <div class="container dashboard-grid">
+  <div class="dashboard-container">
+    <h2 class="dashboard-title">Your Dashboard</h2>
 
-    <!-- Stock Analyzer -->
-    <section class="column analyzer-column card shadow-sm">
-      <div class="card-body">
-        <h3 class="card-title h5">Stock Analyzer</h3>
+    <div class="dashboard-grid">
+      <!-- Left: Analyzer -->
+      <section class="analyzer card">
+        <div class="card-body">
+          <h3 class="section-title">Stock Analyzer</h3>
 
-        <form @submit.prevent="getAnalysis" class="analyzer-form mb-3">
-          <div class="input-group">
-            <input
-              type="text"
-              class="form-control form-control-lg"
-              v-model.trim="tickerInput"
-              placeholder="Enter Ticker (e.g., TCS)"
-              required
-            />
-            <button type="submit" class="btn btn-primary" :disabled="analysisLoading">
-              <span v-if="analysisLoading" class="spinner-border spinner-border-sm"></span>
-              <span v-else>Analyze</span>
-            </button>
+          <div class="analyzer-top">
+            <form @submit.prevent="getAnalysis" class="analyzer-form">
+              <input
+                v-model.trim="tickerInput"
+                type="text"
+                placeholder="Enter Ticker (e.g., TCS)"
+                class="ticker-input"
+                required
+              />
+              <button type="submit" class="btn-analyze" :disabled="analysisLoading">
+                <span v-if="analysisLoading" class="spinner-border spinner-border-sm"></span>
+                <span v-else>Analyze</span>
+              </button>
+            </form>
           </div>
-        </form>
 
-        <div v-if="analysisLoading" class="text-center p-3">
-          <div class="spinner-border text-primary"></div>
-        </div>
-        <div v-else-if="analysisError" class="alert alert-danger">{{ analysisError }}</div>
-        <div v-else-if="analysisResults" class="card mt-3 bg-light">
-          <div class="card-body">
-            <h5>{{ analysisResults.company_name }} ({{ analysisResults.ticker }})</h5>
-            <p><strong>Exchange:</strong> {{ analysisResults.exchange }}</p>
-            <p><strong>Current Price:</strong> {{ formatPrice(analysisResults.last_price) }}</p>
-            <p><strong>Change (%):</strong> {{ analysisResults.change_percent }}%</p>
-            <p><strong>Volume:</strong> {{ formatVolume(analysisResults.volume) }}</p>
-            <hr>
-            <p><strong>Market Cap:</strong> {{ formatMarketCap(analysisResults.market_cap) }}</p>
-            <p><strong>Today's Range:</strong> {{ formatPrice(analysisResults.day_low) }} - {{ formatPrice(analysisResults.day_high) }}</p>
-            <p><strong>Prev. Close:</strong> {{ formatPrice(analysisResults.previous_close) }}</p>
-            <p><strong>Sector:</strong> {{ analysisResults.sector }}</p>
-            <p><strong>Industry:</strong> {{ analysisResults.industry }}</p>
-            <p class="text-muted small">{{ analysisResults.summary.substring(0, 150) + '...' }}</p>
+          <div class="analysis-section">
+            <div v-if="analysisLoading" class="loading-state">
+              <div class="spinner-border text-primary"></div>
+            </div>
 
-            <button
-              @click="addToWatchlist(analysisResults.ticker)"
-              :disabled="isTickerInWatchlist(analysisResults.ticker)"
-              class="btn btn-success btn-sm mt-2"
-            >
-              {{ isTickerInWatchlist(analysisResults.ticker) ? 'Already in Watchlist' : 'Add to Watchlist' }}
-            </button>
+            <div v-else-if="analysisError" class="alert alert-danger">
+              {{ analysisError }}
+            </div>
+
+            <div v-else-if="analysisResults" class="result-card">
+              <h5>{{ analysisResults.company_name }} ({{ analysisResults.ticker }})</h5>
+              <p><strong>Exchange:</strong> {{ analysisResults.exchange }}</p>
+              <p><strong>Current Price:</strong> {{ formatPrice(analysisResults.last_price) }}</p>
+              <p><strong>Change (%):</strong> {{ analysisResults.change_percent }}%</p>
+              <p><strong>Volume:</strong> {{ formatVolume(analysisResults.volume) }}</p>
+              <hr />
+              <p><strong>Market Cap:</strong> {{ formatMarketCap(analysisResults.market_cap) }}</p>
+              <p><strong>Range:</strong> {{ formatPrice(analysisResults.day_low) }} - {{ formatPrice(analysisResults.day_high) }}</p>
+              <p><strong>Prev. Close:</strong> {{ formatPrice(analysisResults.previous_close) }}</p>
+              <p><strong>Sector:</strong> {{ analysisResults.sector }}</p>
+              <p><strong>Industry:</strong> {{ analysisResults.industry }}</p>
+              <p class="summary-text">{{ analysisResults.summary.substring(0, 120) + '...' }}</p>
+
+              <button
+                @click="addToWatchlist(analysisResults.ticker)"
+                :disabled="isTickerInWatchlist(analysisResults.ticker)"
+                class="btn-add"
+              >
+                {{ isTickerInWatchlist(analysisResults.ticker)
+                  ? 'Already in Watchlist'
+                  : 'Add to Watchlist' }}
+              </button>
+            </div>
           </div>
         </div>
-      </div>
-    </section>
+      </section>
 
-    <!-- Watchlist -->
-    <section class="column watchlist-column card shadow-sm">
-      <div class="card-body">
-        <h3 class="card-title h5">My Watchlist</h3>
-        <div v-if="watchlistLoading" class="text-center p-3">
-          <div class="spinner-border text-secondary"></div>
-        </div>
-        <div v-else-if="watchlistError" class="alert alert-warning">{{ watchlistError }}</div>
-        <div v-else-if="watchlist.length === 0" class="text-muted border p-3 rounded">
-          Your watchlist is empty. Use the analyzer to add stocks.
-        </div>
-        <ul v-else class="list-group list-group-flush">
-          <li v-for="item in watchlist" :key="item.id" class="list-group-item d-flex justify-content-between align-items-center">
-            <strong>{{ item.ticker }}</strong>
-            <button @click="deleteFromWatchlist(item.id, item.ticker)" class="btn btn-outline-danger btn-sm">&times;</button>
-          </li>
-        </ul>
-      </div>
-    </section>
+      <!-- Right: Watchlist -->
+      <section class="watchlist card">
+        <div class="card-body">
+          <h3 class="section-title">My Watchlist</h3>
 
+          <div v-if="watchlistLoading" class="loading-state">
+            <div class="spinner-border text-secondary"></div>
+          </div>
+
+          <div v-else-if="watchlistError" class="alert alert-warning">{{ watchlistError }}</div>
+
+          <div v-else-if="watchlist.length === 0" class="empty-watchlist">
+            Your watchlist is empty. Use the analyzer to add stocks.
+          </div>
+
+          <ul v-else class="watchlist-list">
+            <li v-for="item in watchlist" :key="item.id" class="watchlist-item">
+              <span class="ticker-text">{{ item.ticker }}</span>
+              <button
+                @click="deleteFromWatchlist(item.id, item.ticker)"
+                class="btn-delete"
+                title="Remove from Watchlist"
+              >
+                &times;
+              </button>
+            </li>
+          </ul>
+        </div>
+      </section>
+    </div>
   </div>
-</div>
 </template>
-
 <style scoped>
 .dashboard-container {
-  padding-top: 1rem;
+  padding: 2rem;
+  background-color: #f8fafc;
+  min-height: 100vh;
 }
+
+.dashboard-title {
+  text-align: center;
+  font-weight: 700;
+  color: #1e293b;
+  margin-bottom: 2rem;
+}
+
 .dashboard-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
-  gap: 1.5rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2rem;
+  align-items: flex-start;
 }
-.add-watchlist-btn:disabled {
-  opacity: 0.65;
+
+/* --- Cards --- */
+.card {
+  flex: 1 1 48%;
+  background-color: #ffffff;
+  border-radius: 1rem;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.05);
+  transition: all 0.2s ease;
+}
+.card:hover {
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.08);
+}
+.card-body {
+  padding: 1.5rem;
+}
+.section-title {
+  font-weight: 600;
+  font-size: 1.2rem;
+  color: #0f172a;
+  margin-bottom: 1rem;
+}
+
+/* --- Analyzer Layout --- */
+.analyzer-form {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.ticker-input {
+  flex: 1;
+  padding: 0.7rem 1rem;
+  border-radius: 0.6rem;
+  border: 1px solid #cbd5e1;
+  font-size: 1rem;
+  transition: all 0.2s ease;
+}
+.ticker-input:focus {
+  border-color: #3b82f6;
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.15);
+}
+.btn-analyze {
+  background-color: #3b82f6;
+  border: none;
+  color: #fff;
+  padding: 0.65rem 1.2rem;
+  border-radius: 0.6rem;
+  font-weight: 500;
+  font-size: 0.95rem;
+  transition: all 0.2s ease;
+}
+.btn-analyze:hover {
+  background-color: #2563eb;
+}
+
+/* --- Analysis Result --- */
+.result-card {
+  margin-top: 1rem;
+  background-color: #f9fafb;
+  padding: 1.2rem;
+  border-radius: 0.8rem;
+}
+.result-card h5 {
+  font-weight: 600;
+  color: #1e293b;
+  margin-bottom: 0.6rem;
+}
+.summary-text {
+  font-size: 0.9rem;
+  color: #64748b;
+  margin-top: 0.5rem;
+}
+.btn-add {
+  margin-top: 0.8rem;
+  background-color: #10b981;
+  border: none;
+  color: #fff;
+  font-size: 0.85rem;
+  border-radius: 0.6rem;
+  padding: 0.45rem 1rem;
+  transition: background 0.2s ease;
+}
+.btn-add:hover {
+  background-color: #059669;
+}
+
+/* --- Watchlist --- */
+.watchlist-list {
+  margin-top: 0.8rem;
+  padding-left: 0;
+  list-style: none;
+}
+.watchlist-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background-color: #f9fafb;
+  border-radius: 0.6rem;
+  padding: 0.6rem 1rem;
+  margin-bottom: 0.5rem;
+  transition: background 0.2s ease;
+}
+.watchlist-item:hover {
+  background-color: #f1f5f9;
+}
+.ticker-text {
+  font-weight: 500;
+  color: #1e293b;
+}
+.btn-delete {
+  background-color: #fee2e2;
+  color: #b91c1c;
+  border: none;
+  font-size: 1rem;
+  font-weight: bold;
+  padding: 0.2rem 0.55rem;
+  border-radius: 0.4rem;
+  transition: all 0.2s ease;
+}
+.btn-delete:hover {
+  background-color: #ef4444;
+  color: white;
+}
+
+/* --- Empty state --- */
+.empty-watchlist {
+  background-color: #f9fafb;
+  border-radius: 0.6rem;
+  padding: 1rem;
+  text-align: center;
+  color: #64748b;
+  font-size: 0.9rem;
+}
+
+/* --- Shared --- */
+.alert {
+  border-radius: 0.6rem;
+  font-size: 0.9rem;
+}
+.loading-state {
+  text-align: center;
+  padding: 1.5rem 0;
+}
+.spinner-border {
+  width: 1.1rem;
+  height: 1.1rem;
 }
 </style>
