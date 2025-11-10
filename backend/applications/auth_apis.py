@@ -10,6 +10,13 @@ import uuid
 import pandas as pd
 import yfinance as yf
 
+# --- Required Imports (Ensure these are at the top of your file) ---
+import requests
+import feedparser
+from dateutil import parser as dateparser
+from datetime import datetime
+# ... (existing imports like Resource, reqparse, jsonify, yf, etc.)
+
 # --- Global Parsers ---
 analyzer_parser = reqparse.RequestParser()
 analyzer_parser.add_argument(
@@ -53,21 +60,27 @@ class ValidUser(Resource):
         return make_response(jsonify({'message': 'Identifier is available'}), 200)
 
 class Registration(Resource):
-    """API endpoint for new user registration."""
     def post(self):
         data = request.get_json()
         username = data.get('username')
         email = data.get('email')
         password = data.get('password')
-        
+
         if not username or not email or not password:
-            return make_response(jsonify({'message': 'Username, email, and password are required'}), 400)
+            return make_response(jsonify({'message': 'All fields are required'}), 400)
+
+        if user_datastore.find_user(email=email):
+            return make_response(jsonify({'message': 'Email already registered'}), 400)
 
         try:
+            if not user_datastore.find_role("user"):
+                user_datastore.create_role(name="user")
+                db.session.commit()
+
             user = user_datastore.create_user(
                 username=username,
                 email=email,
-                password=hash_password(password), 
+                password=hash_password(password),
                 active=True,
                 roles=["user"],
                 fs_uniquifier=str(uuid.uuid4())
@@ -75,9 +88,10 @@ class Registration(Resource):
             db.session.commit()
             return make_response(jsonify({'message': 'User registered successfully'}), 201)
 
-        except Exception:
+        except Exception as e:
             db.session.rollback()
-            return make_response(jsonify({'message': 'Registration failed due to server error'}), 500)
+            print(f"❌ Registration error: {e}")
+            return make_response(jsonify({'message': 'Registration failed', 'error': str(e)}), 500)
 
 class Login(Resource):
     """API endpoint for user login."""
@@ -251,17 +265,69 @@ class WatchlistItemDeletion(Resource):
 # -------------------------------------------------------------
 # STOCK ANALYZER (Using yfinance)
 # -------------------------------------------------------------
+# --- Global Headers to prevent scraping blocks ---
+RSS_HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+}
+
 class StockAnalyzer(Resource):
     """
-    API resource fetching rich data using yfinance (for robustness).
-    Endpoint: /api/v1/analyze?ticker=<SYMBOL>&exchange=NS
+    API resource fetching rich data using yfinance and news (via robust Google News RSS).
     """
+
+    @staticmethod
+    def _fetch_google_news(query, count=4):
+        """Internal method to fetch and parse Google News RSS for a query."""
+        try:
+            # Construct the Google News RSS URL for a search query (India, English)
+            rss_url = f"https://news.google.com/rss/search?q={query}&hl=en-IN&gl=IN&ceid=IN:en"
+            
+            # Make the network request with headers for stability
+            response = requests.get(rss_url, headers=RSS_HEADERS, timeout=15)
+            response.raise_for_status() # Raise HTTPError for bad status codes (4xx or 5xx)
+
+            feed = feedparser.parse(response.content)
+            news_list = []
+
+            if feed.entries:
+                for entry in feed.entries[:count]:
+                    published_at_str = 'N/A'
+                    
+                    if getattr(entry, 'published', None):
+                        try:
+                            # Use dateutil for robustly parsing various RSS date formats
+                            published_dt = dateparser.parse(entry.published)
+                            published_at_str = published_dt.strftime('%Y-%m-%d %H:%M:%S')
+                        except Exception:
+                            published_at_str = 'N/A'
+                    
+                    news_list.append({
+                        'title': getattr(entry, 'title', 'Headline Unavailable'),
+                        'link': getattr(entry, 'link', '#'),
+                        'source': getattr(entry.source, 'title', 'N/A'),
+                        'type': 'RSS',
+                        'published_at': published_at_str,
+                    })
+                
+            return news_list if news_list else [{'message': f'No recent Google News found for "{query}".'}]
+
+        except requests.exceptions.RequestException as e:
+            # Catch network errors (ConnectionError, Timeout, HTTPError)
+            print(f"ERROR: Network/Scraping failure during news fetch: {e}")
+            return [{'message': 'Failed to retrieve news due to network connection or external block. (Check Python logs)'}]
+        
+        except Exception as e:
+            # Catch general parsing errors
+            print(f"ERROR: General news parsing failure: {e}")
+            return [{'message': 'Failed to retrieve news due to data processing error.'}]
+
+
     def get(self):
         try:
+            # --- Argument Parsing (Unchanged) ---
             args = analyzer_parser.parse_args()
             ticker_symbol = args['ticker'].upper()
             exchange_suffix = args['exchange'].upper()
-            
             yf_symbol = f"{ticker_symbol}.{exchange_suffix}"
             
         except Exception:
@@ -274,31 +340,57 @@ class StockAnalyzer(Resource):
             if 'regularMarketPrice' not in info and 'symbol' not in info:
                 return make_response(jsonify({'message': f'Ticker symbol "{yf_symbol}" not found. Check symbol accuracy.'}), 404)
 
+            # --- 1. Fetch Company Name for News Search Query ---
+            company_name = info.get('longName', ticker_symbol)
+            
+            # KEY FIX: Removed the word "stock" to broaden the search and get fresher general news
+            news_query = f"{company_name}" 
+
+            # --- 2. Execute News Headlines Fetch ---
+            news_data = self._fetch_google_news(news_query, count=4) 
+            
+            # --- 3. Extract Stock Analysis Data (Unchanged) ---
+            # --- 3. Extract Stock Analysis Data (FIXED KEYS) ---
             analysis_data = {
                 'ticker': info.get('symbol', yf_symbol),
-                'company_name': info.get('longName', info.get('shortName', ticker_symbol)),
+                'company_name': company_name,
                 'exchange': info.get('exchange', exchange_suffix),
                 
-                'last_price': info.get('regularMarketPrice'),
-                'previous_close': info.get('previousClose'),
-                'open_price': info.get('regularMarketOpen'),
-                'day_high': info.get('regularMarketDayHigh'),
-                'day_low': info.get('regularMarketDayLow'),
-                'volume': info.get('regularMarketVolume'),
-                'change_percent': info.get('regularMarketChangePercent'),
+                # PRICE/VOLUME FIELDS
+                'last_price': info.get('regularMarketPrice') or info.get('currentPrice'),
+                'previous_close': info.get('previousClose') or info.get('regularMarketPreviousClose'),
 
-                'market_cap': info.get('marketCap'), 
+                # FIX: Use multiple keys for Volatility/Volume fields
+                'open_price': info.get('regularMarketOpen') or info.get('open'),
+                'day_high': info.get('regularMarketDayHigh') or info.get('dayHigh'),
+                'day_low': info.get('regularMarketDayLow') or info.get('dayLow'),
+                
+                # FIX: Check multiple volume fields
+                'volume': info.get('regularMarketVolume') or info.get('volume') or info.get('averageVolume'),
+
+                # FIX: Check multiple Change/Percent fields
+                'change_percent': info.get('regularMarketChangePercent') or info.get('52WeekChange') or 'N/A',
+
+                # FUNDAMENTAL FIELDS
+                'market_cap': info.get('marketCap') or info.get('enterpriseValue'), 
                 'sector': info.get('sector', 'N/A'),
                 'industry': info.get('industry', 'N/A'),
                 'employees': info.get('fullTimeEmployees'),
                 'summary': info.get('longBusinessSummary'),
             }
 
+            # Your final cleanup loop handles the conversion of None/pd.isna to 'N/A'
             for key, value in analysis_data.items():
-                if pd.isna(value) or value is None or value == "":
+                if pd.isna(value) or value is None or value == 0 or value == "": # Added value == 0 check
                     analysis_data[key] = 'N/A'
+            # --- 4. Combine and Return Data ---
+            response_payload = {
+                'analysis': analysis_data,
+                'news_headlines': news_data
+            }
                     
-            return jsonify(analysis_data)
+            return jsonify(response_payload)
 
-        except Exception:
+        except Exception as e:
+            print(f"StockAnalyzer Fatal Error (outer block): {e}")
             return make_response(jsonify({'message': 'Failed to fetch data. The external financial service may be unavailable or blocking requests.'}), 503)

@@ -10,13 +10,14 @@ const messageStore = useMessageStore();
 const router = useRouter();
 
 // --- Backend Config ---
-const backendURL = authStore.getBackendServerURL();
+const backendURL = computed(() => authStore.getBackendServerURL());
 const token = computed(() => authStore.getToken());
 const userId = computed(() => authStore.getUserId());
 
 // --- Analyzer State ---
 const tickerInput = ref('');
 const analysisResults = ref(null);
+const analysisNews = ref([]);     // State for news headlines
 const analysisLoading = ref(false);
 const analysisError = ref(null);
 
@@ -47,13 +48,14 @@ async function getAnalysis() {
 
   analysisLoading.value = true;
   analysisResults.value = null;
+  analysisNews.value = []; // Reset news state
   analysisError.value = null;
 
   const tickerToAnalyze = tickerInput.value.toUpperCase();
   const exchangeToQuery = 'NS';
 
   try {
-    const url = `${backendURL}/api/v1/analyze?ticker=${tickerToAnalyze}&exchange=${exchangeToQuery}`;
+    const url = `${backendURL.value}/api/v1/analyze?ticker=${tickerToAnalyze}&exchange=${exchangeToQuery}`;
     console.log(`🔍 Fetching analysis from: ${url}`);
 
     const response = await fetch(url);
@@ -70,23 +72,32 @@ async function getAnalysis() {
     }
 
     const data = await response.json();
+    
+    // --- Destructure the payload into analysis and news ---
+    const analysis = data.analysis;
+    const news = data.news_headlines || [];
+
     analysisResults.value = {
-      ticker: data.ticker,
-      company_name: data.company_name,
-      exchange: data.exchange,
-      last_price: data.last_price || 'N/A',
-      previous_close: data.previous_close || 'N/A',
-      open_price: data.open_price || 'N/A',
-      day_high: data.day_high || 'N/A',
-      day_low: data.day_low || 'N/A',
-      volume: data.volume || 'N/A',
-      change_percent: data.change_percent || 'N/A',
-      market_cap: data.market_cap || 'N/A',
-      sector: data.sector || 'N/A',
-      industry: data.industry || 'N/A',
-      employees: data.employees || 'N/A',
-      summary: data.summary || 'No summary available.',
+      ticker: analysis.ticker,
+      company_name: analysis.company_name,
+      exchange: analysis.exchange,
+      last_price: analysis.last_price || 'N/A',
+      previous_close: analysis.previous_close || 'N/A',
+      open_price: analysis.open_price || 'N/A',
+      day_high: analysis.day_high || 'N/A',
+      day_low: analysis.day_low || 'N/A',
+      volume: analysis.volume || 'N/A',
+      change_percent: analysis.change_percent || 'N/A',
+      market_cap: analysis.market_cap || 'N/A',
+      sector: analysis.sector || 'N/A',
+      industry: analysis.industry || 'N/A',
+      employees: analysis.employees || 'N/A',
+      summary: analysis.summary || 'No summary available.',
     };
+    
+    // Update news results state
+    analysisNews.value = news;
+
   } catch (err) {
     analysisError.value = err.message || 'Ticker not found or external data unavailable.';
     console.error('❌ Analysis Fetch Error:', err);
@@ -107,7 +118,7 @@ async function fetchWatchlist() {
   const currentUserId = userId.value;
 
   try {
-    const checkUrl = `${backendURL}/api/v1/has_watchlist/${currentUserId}`;
+    const checkUrl = `${backendURL.value}/api/v1/has_watchlist/${currentUserId}`;
     let response = await fetch(checkUrl, { headers: getAuthHeaders() });
     let data = await response.json();
 
@@ -127,7 +138,7 @@ async function fetchWatchlist() {
       return;
     }
 
-    const fetchUrl = `${backendURL}/api/v1/watchlist/${currentUserId}`;
+    const fetchUrl = `${backendURL.value}/api/v1/watchlist/${currentUserId}`;
     response = await fetch(fetchUrl, { headers: getAuthHeaders() });
     data = await response.json();
 
@@ -146,7 +157,7 @@ async function addToWatchlist(ticker) {
 
   const tickerUpper = ticker.toUpperCase();
   try {
-    const url = `${backendURL}/api/v1/watchlist/add`;
+    const url = `${backendURL.value}/api/v1/watchlist/add`;
 
     // 🧠 Ensure userId.value is valid before sending
     if (!userId.value || isNaN(Number(userId.value))) {
@@ -186,7 +197,7 @@ async function deleteFromWatchlist(itemId, itemTicker) {
   watchlist.value = watchlist.value.filter(item => item.id !== itemId);
 
   try {
-    const url = `${backendURL}/api/v1/watchlist/${itemId}`;
+    const url = `${backendURL.value}/api/v1/watchlist/${itemId}`;
     const response = await fetch(url, { method: 'DELETE', headers: getAuthHeaders() });
     if (!response.ok) {
       const errData = await response.json();
@@ -221,268 +232,325 @@ function formatVolume(vol) {
   const num = Number(vol);
   return isNaN(num) ? 'N/A' : num.toLocaleString('en-IN');
 }
+function formatDate(dateString) {
+    if (!dateString || dateString === 'N/A' || dateString.includes('Failed')) return 'N/A';
+    // dateString format from backend is 'YYYY-MM-DD HH:MM:SS'
+    try {
+        const date = new Date(dateString);
+        return date.toLocaleDateString('en-IN', {
+            month: 'short',
+            day: 'numeric',
+            hour: 'numeric',
+            minute: '2-digit'
+        });
+    } catch {
+        return dateString.split(' ')[0]; // Fallback to just date part
+    }
+}
 </script>
 
 <template>
-  <div class="dashboard-container">
-    <h2 class="dashboard-title">Your Dashboard</h2>
-
+  <div class="dashboard">
     <div class="dashboard-grid">
-      <!-- Left: Analyzer -->
-      <section class="analyzer card">
-        <div class="card-body">
-          <h3 class="section-title">Stock Analyzer</h3>
+      <section class="analyzer">
+        <h3 class="section-title">Stock Analyzer</h3>
+        <form @submit.prevent="getAnalysis" class="analyzer-form">
+          <input
+            v-model.trim="tickerInput"
+            type="text"
+            placeholder="Enter Ticker (e.g., TCS)"
+            class="ticker-input"
+            required
+          />
+          <button type="submit" class="btn-analyze" :disabled="analysisLoading">
+            <span v-if="analysisLoading" class="spinner-border spinner-border-sm"></span>
+            <span v-else>Analyze</span>
+          </button>
+        </form>
 
-          <div class="analyzer-top">
-            <form @submit.prevent="getAnalysis" class="analyzer-form">
-              <input
-                v-model.trim="tickerInput"
-                type="text"
-                placeholder="Enter Ticker (e.g., TCS)"
-                class="ticker-input"
-                required
-              />
-              <button type="submit" class="btn-analyze" :disabled="analysisLoading">
-                <span v-if="analysisLoading" class="spinner-border spinner-border-sm"></span>
-                <span v-else>Analyze</span>
-              </button>
-            </form>
+        <div v-if="analysisLoading" class="loading">
+          <div class="spinner-border text-primary"></div>
+        </div>
+        <div v-else-if="analysisError" class="alert alert-danger">{{ analysisError }}</div>
+
+        <div v-else-if="analysisResults" class="analysis-result">
+          <h5>{{ analysisResults.company_name }} ({{ analysisResults.ticker }})</h5>
+          <p><strong>Exchange:</strong> {{ analysisResults.exchange }}</p>
+          <p><strong>Current Price:</strong> {{ formatPrice(analysisResults.last_price) }}</p>
+          <p><strong>Change:</strong> {{ analysisResults.change_percent }}%</p>
+          <p><strong>Volume:</strong> {{ formatVolume(analysisResults.volume) }}</p>
+          <hr />
+          <p><strong>Market Cap:</strong> {{ formatMarketCap(analysisResults.market_cap) }}</p>
+          <p><strong>Range:</strong> {{ formatPrice(analysisResults.day_low) }} - {{ formatPrice(analysisResults.day_high) }}</p>
+          <p><strong>Prev. Close:</strong> {{ formatPrice(analysisResults.previous_close) }}</p>
+          <p><strong>Sector:</strong> {{ analysisResults.sector }}</p>
+          <p><strong>Industry:</strong> {{ analysisResults.industry }}</p>
+          <p class="summary">{{ analysisResults.summary.substring(0, 120) + '...' }}</p>
+
+          <div class="news-section">
+            <h6 class="news-title">Latest News 📰</h6>
+            <ul v-if="analysisNews.length > 0 && !analysisNews[0].message" class="news-list">
+              <li v-for="(news, index) in analysisNews" :key="index" class="news-item">
+                <a :href="news.link" target="_blank" rel="noopener noreferrer" class="news-link">
+                  {{ news.title }}
+                </a>
+                <p class="news-meta">
+                  <span class="news-source">{{ news.source }}</span>
+                  <span class="news-separator">|</span>
+                  <span class="news-date">{{ formatDate(news.published_at) }}</span>
+                </p>
+              </li>
+            </ul>
+            <p v-else class="empty-news">
+                {{ analysisNews.length > 0 && analysisNews[0].message ? analysisNews[0].message : 'No recent news found for this ticker.' }}
+            </p>
           </div>
-
-          <div class="analysis-section">
-            <div v-if="analysisLoading" class="loading-state">
-              <div class="spinner-border text-primary"></div>
-            </div>
-
-            <div v-else-if="analysisError" class="alert alert-danger">
-              {{ analysisError }}
-            </div>
-
-            <div v-else-if="analysisResults" class="result-card">
-              <h5>{{ analysisResults.company_name }} ({{ analysisResults.ticker }})</h5>
-              <p><strong>Exchange:</strong> {{ analysisResults.exchange }}</p>
-              <p><strong>Current Price:</strong> {{ formatPrice(analysisResults.last_price) }}</p>
-              <p><strong>Change (%):</strong> {{ analysisResults.change_percent }}%</p>
-              <p><strong>Volume:</strong> {{ formatVolume(analysisResults.volume) }}</p>
-              <hr />
-              <p><strong>Market Cap:</strong> {{ formatMarketCap(analysisResults.market_cap) }}</p>
-              <p><strong>Range:</strong> {{ formatPrice(analysisResults.day_low) }} - {{ formatPrice(analysisResults.day_high) }}</p>
-              <p><strong>Prev. Close:</strong> {{ formatPrice(analysisResults.previous_close) }}</p>
-              <p><strong>Sector:</strong> {{ analysisResults.sector }}</p>
-              <p><strong>Industry:</strong> {{ analysisResults.industry }}</p>
-              <p class="summary-text">{{ analysisResults.summary.substring(0, 120) + '...' }}</p>
-
-              <button
-                @click="addToWatchlist(analysisResults.ticker)"
-                :disabled="isTickerInWatchlist(analysisResults.ticker)"
-                class="btn-add"
-              >
-                {{ isTickerInWatchlist(analysisResults.ticker)
-                  ? 'Already in Watchlist'
-                  : 'Add to Watchlist' }}
-              </button>
-            </div>
-          </div>
+          <button
+            @click="addToWatchlist(analysisResults.ticker)"
+            :disabled="isTickerInWatchlist(analysisResults.ticker)"
+            class="btn-add"
+          >
+            {{ isTickerInWatchlist(analysisResults.ticker)
+              ? 'Already in Watchlist'
+              : 'Add to Watchlist' }}
+          </button>
         </div>
       </section>
 
-      <!-- Right: Watchlist -->
-      <section class="watchlist card">
-        <div class="card-body">
-          <h3 class="section-title">My Watchlist</h3>
-
-          <div v-if="watchlistLoading" class="loading-state">
-            <div class="spinner-border text-secondary"></div>
-          </div>
-
-          <div v-else-if="watchlistError" class="alert alert-warning">{{ watchlistError }}</div>
-
-          <div v-else-if="watchlist.length === 0" class="empty-watchlist">
-            Your watchlist is empty. Use the analyzer to add stocks.
-          </div>
-
-          <ul v-else class="watchlist-list">
-            <li v-for="item in watchlist" :key="item.id" class="watchlist-item">
-              <span class="ticker-text">{{ item.ticker }}</span>
-              <button
-                @click="deleteFromWatchlist(item.id, item.ticker)"
-                class="btn-delete"
-                title="Remove from Watchlist"
-              >
-                &times;
-              </button>
-            </li>
-          </ul>
+      <section class="watchlist">
+        <h3 class="section-title">My Watchlist</h3>
+        <div v-if="watchlistLoading" class="loading">
+          <div class="spinner-border text-secondary"></div>
         </div>
+        <div v-else-if="watchlistError" class="alert alert-warning">{{ watchlistError }}</div>
+        <div v-else-if="watchlist.length === 0" class="empty">
+          Your watchlist is empty.
+        </div>
+
+        <ul v-else class="watchlist-list">
+          <li v-for="item in watchlist" :key="item.id" class="watchlist-item">
+            <span>{{ item.ticker }}</span>
+            <button
+              @click="deleteFromWatchlist(item.id, item.ticker)"
+              class="btn-delete"
+              title="Remove"
+            >
+              ×
+            </button>
+          </li>
+          <li v-if="!analysisResults && watchlist.length > 0" class="watchlist-hint">
+            Select a ticker to analyze.
+          </li>
+        </ul>
       </section>
     </div>
   </div>
 </template>
-<style scoped>
-.dashboard-container {
-  padding: 2rem;
-  background-color: #f8fafc;
-  min-height: 100vh;
-}
 
-.dashboard-title {
-  text-align: center;
-  font-weight: 700;
-  color: #1e293b;
-  margin-bottom: 2rem;
+<style scoped>
+/* All styles remain the same, just included here for completeness */
+.dashboard {
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding: 2rem;
+  background-color: #f9fafb;
+  height: 100vh;
+  overflow: hidden;
 }
 
 .dashboard-grid {
   display: flex;
-  flex-wrap: wrap;
   gap: 2rem;
-  align-items: flex-start;
+  width: 100%;
+  max-width: 1100px;
+  height: 90%;
+  overflow: hidden;
 }
 
-/* --- Cards --- */
-.card {
-  flex: 1 1 48%;
-  background-color: #ffffff;
-  border-radius: 1rem;
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.05);
-  transition: all 0.2s ease;
-}
-.card:hover {
-  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.08);
-}
-.card-body {
+/* Panels */
+.analyzer,
+.watchlist {
+  flex: 1;
+  background-color: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 0.75rem;
   padding: 1.5rem;
-}
-.section-title {
-  font-weight: 600;
-  font-size: 1.2rem;
-  color: #0f172a;
-  margin-bottom: 1rem;
+  overflow-y: auto;
 }
 
-/* --- Analyzer Layout --- */
+/* Keep scroll inside cards neat */
+.analyzer::-webkit-scrollbar,
+.watchlist::-webkit-scrollbar {
+  width: 6px;
+}
+.analyzer::-webkit-scrollbar-thumb,
+.watchlist::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 4px;
+}
+
+/* Rest of previous styles stay same */
+.section-title {
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: #1e293b;
+  margin-bottom: 1rem;
+  border-bottom: 1px solid #e2e8f0;
+  padding-bottom: 0.5rem;
+}
+
 .analyzer-form {
   display: flex;
-  align-items: center;
   gap: 0.5rem;
 }
+
 .ticker-input {
   flex: 1;
-  padding: 0.7rem 1rem;
-  border-radius: 0.6rem;
+  padding: 0.6rem 1rem;
   border: 1px solid #cbd5e1;
-  font-size: 1rem;
+  border-radius: 0.5rem;
+  font-size: 0.95rem;
   transition: all 0.2s ease;
 }
 .ticker-input:focus {
   border-color: #3b82f6;
   outline: none;
-  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.15);
 }
+
 .btn-analyze {
   background-color: #3b82f6;
-  border: none;
   color: #fff;
-  padding: 0.65rem 1.2rem;
-  border-radius: 0.6rem;
+  border: none;
+  border-radius: 0.5rem;
+  padding: 0.55rem 1.1rem;
   font-weight: 500;
-  font-size: 0.95rem;
-  transition: all 0.2s ease;
+  transition: background 0.2s ease;
 }
 .btn-analyze:hover {
   background-color: #2563eb;
 }
 
-/* --- Analysis Result --- */
-.result-card {
-  margin-top: 1rem;
-  background-color: #f9fafb;
-  padding: 1.2rem;
-  border-radius: 0.8rem;
+.analysis-result {
+  margin-top: 1.2rem;
+  font-size: 0.9rem;
+  color: #334155;
 }
-.result-card h5 {
+.analysis-result h5 {
+  font-size: 1rem;
   font-weight: 600;
-  color: #1e293b;
   margin-bottom: 0.6rem;
 }
-.summary-text {
-  font-size: 0.9rem;
+
+.summary {
   color: #64748b;
   margin-top: 0.5rem;
 }
+
 .btn-add {
   margin-top: 0.8rem;
   background-color: #10b981;
   border: none;
   color: #fff;
   font-size: 0.85rem;
-  border-radius: 0.6rem;
+  border-radius: 0.5rem;
   padding: 0.45rem 1rem;
-  transition: background 0.2s ease;
 }
 .btn-add:hover {
   background-color: #059669;
 }
 
-/* --- Watchlist --- */
+/* Watchlist */
 .watchlist-list {
-  margin-top: 0.8rem;
-  padding-left: 0;
   list-style: none;
+  padding: 0;
+  margin-top: 1rem;
 }
 .watchlist-item {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  background-color: #f9fafb;
-  border-radius: 0.6rem;
-  padding: 0.6rem 1rem;
-  margin-bottom: 0.5rem;
-  transition: background 0.2s ease;
+  padding: 0.55rem 0.8rem;
+  border-bottom: 1px solid #e2e8f0;
+  font-size: 0.9rem;
 }
-.watchlist-item:hover {
-  background-color: #f1f5f9;
-}
-.ticker-text {
-  font-weight: 500;
-  color: #1e293b;
+.watchlist-hint {
+    font-size: 0.8rem;
+    color: #94a3b8;
+    text-align: center;
+    padding: 1rem 0;
+    font-style: italic;
 }
 .btn-delete {
-  background-color: #fee2e2;
-  color: #b91c1c;
+  background: none;
   border: none;
+  color: #ef4444;
   font-size: 1rem;
-  font-weight: bold;
-  padding: 0.2rem 0.55rem;
-  border-radius: 0.4rem;
-  transition: all 0.2s ease;
+  cursor: pointer;
 }
 .btn-delete:hover {
-  background-color: #ef4444;
-  color: white;
+  color: #dc2626;
 }
-
-/* --- Empty state --- */
-.empty-watchlist {
-  background-color: #f9fafb;
-  border-radius: 0.6rem;
-  padding: 1rem;
-  text-align: center;
+.empty {
+  font-size: 0.9rem;
   color: #64748b;
-  font-size: 0.9rem;
+  text-align: center;
+  padding: 1rem 0;
+}
+.loading {
+  text-align: center;
+  padding: 1rem 0;
 }
 
-/* --- Shared --- */
-.alert {
-  border-radius: 0.6rem;
-  font-size: 0.9rem;
+/* --- News Styling --- */
+.news-section {
+    margin-top: 1.5rem;
+    padding-top: 1rem;
+    border-top: 1px dashed #e2e8f0;
 }
-.loading-state {
-  text-align: center;
-  padding: 1.5rem 0;
+
+.news-title {
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: #475569;
+    margin-bottom: 0.8rem;
 }
-.spinner-border {
-  width: 1.1rem;
-  height: 1.1rem;
+
+.news-list {
+    list-style: none;
+    padding: 0;
+}
+
+.news-item {
+    margin-bottom: 1rem;
+}
+
+.news-link {
+    font-size: 0.9rem;
+    color: #3b82f6;
+    text-decoration: none;
+    font-weight: 500;
+    line-height: 1.3;
+    display: block;
+}
+.news-link:hover {
+    text-decoration: underline;
+    color: #2563eb;
+}
+
+.news-meta {
+    font-size: 0.75rem;
+    color: #94a3b8;
+    margin-top: 0.2rem;
+}
+
+.news-separator {
+    margin: 0 0.3rem;
+}
+
+.empty-news {
+    font-size: 0.85rem;
+    color: #64748b;
+    font-style: italic;
 }
 </style>

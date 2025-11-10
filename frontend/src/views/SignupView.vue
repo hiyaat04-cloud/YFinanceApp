@@ -29,7 +29,8 @@ function validateInput() {
     messageStore.setFlashMessage('Password must be at least 8 characters.');
     return false;
   }
-  const emailRegex = /^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/;
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
   if (!emailRegex.test(email.value)) {
     messageStore.setFlashMessage('Enter a valid email address.');
     return false;
