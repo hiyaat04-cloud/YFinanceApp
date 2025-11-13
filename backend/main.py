@@ -11,6 +11,9 @@ from applications.database import db
 from applications.models import User, Role # Ensure both are defined in models.py
 from applications.user_datastore import user_datastore # Ensure this is correctly initialized
 from create_initial_data import create_data
+from applications.stock_7_14 import Predict
+from applications.monte_carlo import *
+from applications.bullish_berish import *
 
 # Import API Resource classes
 from applications.auth_apis import *
@@ -48,6 +51,13 @@ def create_app():
     api.add_resource(StockAnalyzer, '/analyze')
     api.add_resource(WatchlistItemDeletion, '/watchlist/<int:item_id>')
     api.add_resource(AddToWatchlist, '/watchlist/add')
+    
+    
+    #mlp apis
+    api.add_resource(Predict,'/predict')  #/api/v1/predict
+    api.add_resource(MonteCarlo, "/montecarlo")
+    api.add_resource(TechnicalSignal, "/technical_signal")
+    
 
     print("API resources registered under /api/v1 prefix.")
 
